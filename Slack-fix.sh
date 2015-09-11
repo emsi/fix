@@ -98,6 +98,8 @@ set background=dark	" tell vim that your background is dark
 
 set wildmode=longest,list,full	" shell like autocomplete
 
+set mouse=a		" enable mouse
+
 " Only do this part when compiled with support for autocommands.
 if has("autocmd")
 
