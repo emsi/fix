@@ -3,12 +3,38 @@
 #"Debian" "fix" script
 
 # Infinite history
-sed -i -e 's/HISTCONTROL=.*/HISTCONTROL=ignoredups/' /etc/skel/.bashrc
-sed -i -e 's/HISTCONTROL=.*/HISTCONTROL=ignoredups/' ~/.bashrc
+sed -i -e 's/HISTCONTROL=.*/HISTCONTROL=ignoredups:erasedups/' /etc/skel/.bashrc
+sed -i -e 's/HISTCONTROL=.*/HISTCONTROL=ignoredups:erasedups/' ~/.bashrc
+sed -i -e 's/HISTCONTROL=.*/HISTCONTROL=ignoredups:erasedups/' /root/.bashrc
+sed -i -e 's/HISTSIZE=.*/HISTSIZE=100000/' /etc/skel/.bashrc
+sed -i -e 's/HISTSIZE=.*/HISTSIZE=100000/' ~/.bashrc
+sed -i -e 's/HISTSIZE=.*/HISTSIZE=100000/' /root/.bashrc
+sed -i -e 's/HISTFILESIZE=.*/HISTFILESIZE=100000/' /etc/skel/.bashrc
+sed -i -e 's/HISTFILESIZE=.*/HISTFILESIZE=100000/' ~/.bashrc
+sed -i -e 's/HISTFILESIZE=.*/HISTFILESIZE=100000/' /root/.bashrc
 
 # vi editor
 echo "export EDITOR=vi" >> /etc/skel/.bashrc
 echo "export EDITOR=vi" >> ~/.bashrc
+echo "export EDITOR=vi" >> /root/.bashrc
+
+# History preservance
+cat >> /etc/skel/.bashrc << EOF
+shopt -s histappend                      # append to history, don't overwrite it
+export PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND$'\n'}history -a; history -c; history -r"
+EOF
+
+# History preservance
+cat >> ~/.bashrc << EOF
+shopt -s histappend                      # append to history, don't overwrite it
+export PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND$'\n'}history -a; history -c; history -r"
+EOF
+
+# History preservance
+cat >> /root/.bashrc << EOF
+shopt -s histappend                      # append to history, don't overwrite it
+export PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND$'\n'}history -a; history -c; history -r"
+EOF
 
 # vimrc file
 wget -qO- https://raw.githubusercontent.com/emsi/fix/master/vimrc > /usr/share/vim/vimrc
