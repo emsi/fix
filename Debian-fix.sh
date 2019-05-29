@@ -2,6 +2,10 @@
 
 #"Debian" "fix" script
 
+# preserver home in sudo (ubuntu behavior)
+# https://unix.stackexchange.com/questions/91384/how-is-sudo-set-to-not-change-home-in-ubuntu-and-how-to-disable-this-behavior
+echo 'Defaults	env_keep+="HOME"' >> /etc/sudoers
+
 # Infinite history
 sed -i -e 's/HISTCONTROL=.*/HISTCONTROL=ignoredups:erasedups/' /etc/skel/.bashrc
 sed -i -e 's/HISTCONTROL=.*/HISTCONTROL=ignoredups:erasedups/' ~/.bashrc
