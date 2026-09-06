@@ -41,17 +41,25 @@ WORK_DIR=''
 BACKUP_DIR=''
 declare -a MISSING_PACKAGES=()
 
+if ((EUID == 0)) && [[ -n ${SUDO_USER:-} && ${SUDO_USER:-} != root ]]; then
+    readonly INVOKING_USER=$SUDO_USER
+else
+    INVOKING_USER=$(id -un) || exit 1
+    readonly INVOKING_USER
+fi
+
 usage() {
     cat <<EOF
-Usage: sudo ./$PROGRAM [--user USER] [--apply]
+Usage: ./$PROGRAM [--user [USER]] [--apply]
 
 Without --apply, perform a read-only preflight and show what would change.
-With --apply, install the baseline packages and apply the managed settings.
+With --apply, request sudo when necessary, install the baseline packages, and
+apply the managed settings.
 
 Options:
-  --user USER  Configure USER, root, and /etc/skel (default: SUDO_USER)
-  --apply      Apply changes after all preflight checks pass
-  -h, --help   Show this help
+  --user [USER]  Configure the invoking user, or USER when supplied
+  --apply        Apply changes after all preflight checks pass
+  -h, --help     Show this help
 EOF
 }
 
@@ -62,6 +70,28 @@ log() {
 die() {
     printf 'ERROR: %s\n' "$*" >&2
     exit 1
+}
+
+find_visudo() {
+    if command -v visudo >/dev/null 2>&1; then
+        command -v visudo
+    elif [[ -x /usr/sbin/visudo ]]; then
+        printf '%s\n' /usr/sbin/visudo
+    else
+        return 1
+    fi
+}
+
+can_inspect_file() {
+    local file=$1
+    local parent
+
+    if [[ -e $file || -L $file ]]; then
+        [[ -L $file || -r $file ]]
+    else
+        parent=$(dirname -- "$file")
+        [[ -x $parent ]]
+    fi
 }
 
 cleanup() {
@@ -78,9 +108,12 @@ while (($#)); do
             APPLY=1
             ;;
         --user)
-            shift
-            (($#)) || die '--user requires a user name'
-            TARGET_USER=$1
+            if (($# > 1)) && [[ $2 != -* ]]; then
+                TARGET_USER=$2
+                shift
+            else
+                TARGET_USER=$INVOKING_USER
+            fi
             ;;
         -h | --help)
             usage
@@ -93,10 +126,8 @@ while (($#)); do
     shift
 done
 
-((EUID == 0)) || die "run with sudo: sudo ./$PROGRAM"
-
 if [[ -z $TARGET_USER ]]; then
-    TARGET_USER=${SUDO_USER:-}
+    TARGET_USER=$INVOKING_USER
 fi
 [[ -n $TARGET_USER && $TARGET_USER != root ]] ||
     die 'cannot determine the non-root target user; pass --user USER'
@@ -121,15 +152,25 @@ IFS=: read -r _ _ TARGET_UID TARGET_GID _ TARGET_HOME TARGET_SHELL <<<"$passwd_e
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly SCRIPT_DIR
+readonly SCRIPT_PATH=$SCRIPT_DIR/${BASH_SOURCE[0]##*/}
 readonly NVIMRC_SOURCE=$SCRIPT_DIR/nvimrc
 [[ -f $NVIMRC_SOURCE && ! -L $NVIMRC_SOURCE ]] ||
     die "expected a regular file next to the script: $NVIMRC_SOURCE"
+
+if ((APPLY && EUID != 0)); then
+    command -v sudo >/dev/null 2>&1 ||
+        die 'sudo is required to apply system changes'
+    log "Requesting sudo to apply changes for $TARGET_USER..."
+    exec sudo -- "$SCRIPT_PATH" --user "$TARGET_USER" --apply
+fi
 
 available_locales=$(locale -a)
 awk 'BEGIN { found=0 }
      { value=tolower($0); gsub(/[._-]/, "", value); if (value == "cutf8") found=1 }
      END { exit !found }' <<<"$available_locales" ||
     die 'C.UTF-8 is not available on this system'
+
+VISUDO=$(find_visudo || :)
 
 WORK_DIR=$(mktemp -d)
 chmod 0700 "$WORK_DIR"
@@ -202,7 +243,7 @@ render_managed_file() {
     local output_file=$5
     local input_file=$source_file
 
-    if [[ -e $source_file ]]; then
+    if [[ -e $source_file || -L $source_file ]]; then
         [[ -f $source_file && ! -L $source_file ]] ||
             die "refusing to replace a non-regular file or symlink: $source_file"
         [[ -r $source_file ]] || die "cannot read: $source_file"
@@ -252,7 +293,7 @@ ensure_backup_dir() {
 
 backup_file() {
     local file=$1
-    [[ -e $file ]] || return 0
+    [[ -e $file || -L $file ]] || return 0
     ensure_backup_dir
     local backup_name=${file#/}
     backup_name=${backup_name//\//_}
@@ -271,7 +312,7 @@ install_file_atomically() {
     local temporary_target
     local target_dir
 
-    if [[ -e $target_file ]]; then
+    if [[ -e $target_file || -L $target_file ]]; then
         [[ -f $target_file && ! -L $target_file ]] ||
             die "refusing to replace a non-regular file or symlink: $target_file"
         if cmp -s -- "$source_file" "$target_file"; then
@@ -322,13 +363,29 @@ readonly NVIM_SYSINIT=/etc/xdg/nvim/sysinit.vim
 readonly NVIM_CONFIG=/etc/xdg/nvim/debian-fix.vim
 readonly SUDOERS_DROPIN=/etc/sudoers.d/90-debian-fix-home
 
-skel_rendered=$(prepare_bashrc "$SKEL_BASHRC" skel)
-user_rendered=$(prepare_bashrc "$USER_BASHRC" user)
-root_rendered=$(prepare_bashrc "$ROOT_BASHRC" root)
-render_managed_file "$NVIM_SYSINIT" "$WORK_DIR/nvim.block" "$NVIM_BEGIN" "$NVIM_END" \
-    "$WORK_DIR/sysinit.vim"
-render_managed_file "$NVIM_SYSINIT" "$WORK_DIR/nvim-validation.block" "$NVIM_BEGIN" "$NVIM_END" \
-    "$WORK_DIR/sysinit-validation.vim"
+skel_rendered=''
+user_rendered=''
+root_rendered=''
+sysinit_rendered=''
+sysinit_validation=''
+
+if ((EUID == 0)) || can_inspect_file "$SKEL_BASHRC"; then
+    skel_rendered=$(prepare_bashrc "$SKEL_BASHRC" skel)
+fi
+if ((EUID == 0)) || can_inspect_file "$USER_BASHRC"; then
+    user_rendered=$(prepare_bashrc "$USER_BASHRC" user)
+fi
+if ((EUID == 0)); then
+    root_rendered=$(prepare_bashrc "$ROOT_BASHRC" root)
+fi
+if ((EUID == 0)) || can_inspect_file "$NVIM_SYSINIT"; then
+    sysinit_rendered=$WORK_DIR/sysinit.vim
+    sysinit_validation=$WORK_DIR/sysinit-validation.vim
+    render_managed_file "$NVIM_SYSINIT" "$WORK_DIR/nvim.block" "$NVIM_BEGIN" "$NVIM_END" \
+        "$sysinit_rendered"
+    render_managed_file "$NVIM_SYSINIT" "$WORK_DIR/nvim-validation.block" "$NVIM_BEGIN" "$NVIM_END" \
+        "$sysinit_validation"
+fi
 
 printf 'Defaults:%s env_keep += "HOME"\n' "$TARGET_USER" >"$WORK_DIR/sudoers"
 chmod 0440 "$WORK_DIR/sudoers"
@@ -354,27 +411,73 @@ if ((!APPLY)); then
     if command -v nvim >/dev/null 2>&1; then
         nvim --headless -u "$NVIMRC_SOURCE" '+qa!' >/dev/null 2>&1 ||
             die "Neovim rejected $NVIMRC_SOURCE"
-        nvim --headless -u "$WORK_DIR/sysinit-validation.vim" '+qa!' >/dev/null 2>&1 ||
-            die 'Neovim rejected the prospective system configuration'
+        if [[ -n $sysinit_validation ]]; then
+            nvim --headless -u "$sysinit_validation" '+qa!' >/dev/null 2>&1 ||
+                die 'Neovim rejected the prospective system configuration'
+        else
+            log "deferred (requires root): Neovim validation of $NVIM_SYSINIT"
+        fi
     else
         log 'Neovim validation deferred until the neovim package is installed.'
     fi
-    install_file_atomically "$skel_rendered" "$SKEL_BASHRC" 0644 0 0
-    install_file_atomically "$user_rendered" "$USER_BASHRC" 0644 "$TARGET_UID" "$TARGET_GID"
-    install_file_atomically "$root_rendered" "$ROOT_BASHRC" 0644 0 0
-    install_file_atomically "$WORK_DIR/sysinit.vim" "$NVIM_SYSINIT" 0644 0 0
-    install_file_atomically "$NVIMRC_SOURCE" "$NVIM_CONFIG" 0644 0 0
-    if command -v visudo >/dev/null 2>&1; then
-        visudo -cf "$WORK_DIR/sudoers" >/dev/null || die 'generated sudoers rule is invalid'
-        visudo -cf /etc/sudoers >/dev/null || die 'existing sudoers configuration is invalid'
+    if [[ -n $skel_rendered ]]; then
+        install_file_atomically "$skel_rendered" "$SKEL_BASHRC" 0644 0 0
+    else
+        log "deferred (requires root): $SKEL_BASHRC"
     fi
-    install_file_atomically "$WORK_DIR/sudoers" "$SUDOERS_DROPIN" 0440 0 0
+    if [[ -n $user_rendered ]]; then
+        install_file_atomically "$user_rendered" "$USER_BASHRC" 0644 "$TARGET_UID" "$TARGET_GID"
+    else
+        log "deferred (requires root): $USER_BASHRC"
+    fi
+    if [[ -n $root_rendered ]]; then
+        install_file_atomically "$root_rendered" "$ROOT_BASHRC" 0644 0 0
+    else
+        log "deferred (requires root): $ROOT_BASHRC"
+    fi
+    if [[ -n $sysinit_rendered ]]; then
+        install_file_atomically "$sysinit_rendered" "$NVIM_SYSINIT" 0644 0 0
+    else
+        log "deferred (requires root): $NVIM_SYSINIT"
+    fi
+    if ((EUID == 0)) || can_inspect_file "$NVIM_CONFIG"; then
+        install_file_atomically "$NVIMRC_SOURCE" "$NVIM_CONFIG" 0644 0 0
+    else
+        log "deferred (requires root): $NVIM_CONFIG"
+    fi
+    if [[ -n $VISUDO ]]; then
+        "$VISUDO" -cf "$WORK_DIR/sudoers" >/dev/null || die 'generated sudoers rule is invalid'
+        if ((EUID == 0)); then
+            "$VISUDO" -cf /etc/sudoers >/dev/null || die 'existing sudoers configuration is invalid'
+        else
+            log 'deferred (requires root): validation of /etc/sudoers'
+        fi
+    else
+        log 'sudoers validation deferred until the sudo package is installed.'
+    fi
+    if ((EUID == 0)); then
+        install_file_atomically "$WORK_DIR/sudoers" "$SUDOERS_DROPIN" 0440 0 0
+    else
+        log "deferred (requires root): $SUDOERS_DROPIN"
+    fi
 
     log
     log 'Preflight passed; no persistent changes were made.'
-    log "Apply with: sudo ./$PROGRAM --user $TARGET_USER --apply"
+    if ((EUID != 0)); then
+        log 'Privileged checks marked deferred will run after --apply requests sudo.'
+    fi
+    if [[ $TARGET_USER == "$INVOKING_USER" ]]; then
+        log "Apply with: ./$PROGRAM --user --apply"
+    else
+        log "Apply with: ./$PROGRAM --user $TARGET_USER --apply"
+    fi
     exit 0
 fi
+
+((EUID == 0)) || die 'internal error: apply mode requires root'
+[[ -n $skel_rendered && -n $user_rendered && -n $root_rendered &&
+    -n $sysinit_rendered && -n $sysinit_validation ]] ||
+    die 'internal error: privileged configuration preflight was incomplete'
 
 exec 9>/run/lock/debian-fix.lock
 flock -n 9 || die 'another Debian-fix run is active'
@@ -395,13 +498,14 @@ for package in "${PACKAGES[@]}"; do
         die "package is not installed after APT completed: $package"
 done
 
-command -v visudo >/dev/null 2>&1 || die 'visudo is unavailable after installing sudo'
+VISUDO=$(find_visudo || :)
+[[ -n $VISUDO ]] || die 'visudo is unavailable after installing sudo'
 command -v nvim >/dev/null 2>&1 || die 'nvim is unavailable after installing neovim'
-visudo -cf "$WORK_DIR/sudoers" >/dev/null || die 'generated sudoers rule is invalid'
-visudo -cf /etc/sudoers >/dev/null || die 'sudoers configuration became invalid'
+"$VISUDO" -cf "$WORK_DIR/sudoers" >/dev/null || die 'generated sudoers rule is invalid'
+"$VISUDO" -cf /etc/sudoers >/dev/null || die 'sudoers configuration became invalid'
 nvim --headless -u "$NVIMRC_SOURCE" '+qa!' >/dev/null 2>&1 ||
     die "Neovim rejected $NVIMRC_SOURCE"
-nvim --headless -u "$WORK_DIR/sysinit-validation.vim" '+qa!' >/dev/null 2>&1 ||
+nvim --headless -u "$sysinit_validation" '+qa!' >/dev/null 2>&1 ||
     die 'Neovim rejected the prospective system configuration'
 
 # Configuration was only planned above. Apply it now that packages and their
@@ -409,7 +513,7 @@ nvim --headless -u "$WORK_DIR/sysinit-validation.vim" '+qa!' >/dev/null 2>&1 ||
 install_file_atomically "$skel_rendered" "$SKEL_BASHRC" 0644 0 0
 install_file_atomically "$user_rendered" "$USER_BASHRC" 0644 "$TARGET_UID" "$TARGET_GID"
 install_file_atomically "$root_rendered" "$ROOT_BASHRC" 0644 0 0
-install_file_atomically "$WORK_DIR/sysinit.vim" "$NVIM_SYSINIT" 0644 0 0
+install_file_atomically "$sysinit_rendered" "$NVIM_SYSINIT" 0644 0 0
 install_file_atomically "$NVIMRC_SOURCE" "$NVIM_CONFIG" 0644 0 0
 
 sudoers_existed=0
@@ -418,7 +522,7 @@ if [[ -e $SUDOERS_DROPIN ]]; then
     cp -a -- "$SUDOERS_DROPIN" "$WORK_DIR/sudoers.previous"
 fi
 install_file_atomically "$WORK_DIR/sudoers" "$SUDOERS_DROPIN" 0440 0 0
-if ! visudo -cf /etc/sudoers >/dev/null; then
+if ! "$VISUDO" -cf /etc/sudoers >/dev/null; then
     if ((sudoers_existed)); then
         cp -a -- "$WORK_DIR/sudoers.previous" "$SUDOERS_DROPIN"
     else

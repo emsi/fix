@@ -16,14 +16,35 @@ command that must use root's home directory instead.
 Run the read-only preflight first:
 
 ```sh
-sudo ./Debian-fix.sh
+./Debian-fix.sh
 ```
 
 Review the output, then apply it explicitly:
 
 ```sh
-sudo ./Debian-fix.sh --apply
+./Debian-fix.sh --apply
 ```
+
+Preflight does not need sudo. Checks that require access to protected files are
+reported as deferred. In apply mode the script requests sudo itself, performs
+the complete preflight as root, and only then makes changes.
+
+The invoking account is selected by default. Bare `--user` explicitly makes
+the same selection, so these commands are equivalent:
+
+```sh
+./Debian-fix.sh --apply
+./Debian-fix.sh --user --apply
+```
+
+To configure a particular non-root account instead, pass its name:
+
+```sh
+./Debian-fix.sh --user USER --apply
+```
+
+In each case, the script configures the selected user's `.bashrc`, root's
+`.bashrc`, and `/etc/skel/.bashrc`, in addition to the system-wide settings.
 
 When running directly from a root login, specify the non-root account:
 
