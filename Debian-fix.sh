@@ -36,6 +36,8 @@ readonly -a PACKAGES=(
 )
 
 APPLY=0
+USER_ONLY=0
+SYSTEM_TARGET_SET=0
 TARGET_USER=''
 WORK_DIR=''
 BACKUP_DIR=''
@@ -50,16 +52,17 @@ fi
 
 usage() {
     cat <<EOF
-Usage: bash ./$PROGRAM [--user [USER]] [--apply]
+Usage: bash ./$PROGRAM [--user [USER] | --target-user USER] [--apply]
 
-Without --apply, perform a read-only preflight and show what would change.
-With --apply, request sudo when necessary, install the baseline packages, and
-apply the managed settings.
+With no options, request sudo and perform a full-system read-only preflight.
+With --apply, apply the selected scope after its preflight checks pass.
 
 Options:
-  --user [USER]  Configure the invoking user, or USER when supplied
-  --apply        Apply changes after all preflight checks pass
-  -h, --help     Show this help
+  --user [USER]       Limit work to the invoking user, or USER when supplied;
+                      never request sudo
+  --target-user USER  Select USER for full-system work (normally unnecessary)
+  --apply             Apply changes after all preflight checks pass
+  -h, --help          Show this help
 EOF
 }
 
@@ -108,12 +111,25 @@ while (($#)); do
             APPLY=1
             ;;
         --user)
+            ((SYSTEM_TARGET_SET == 0)) ||
+                die '--user and --target-user cannot be used together'
+            USER_ONLY=1
             if (($# > 1)) && [[ $2 != -* ]]; then
                 TARGET_USER=$2
                 shift
             else
                 TARGET_USER=$INVOKING_USER
             fi
+            ;;
+        --target-user)
+            ((USER_ONLY == 0)) ||
+                die '--user and --target-user cannot be used together'
+            shift
+            if (($# == 0)) || [[ $1 == -* ]]; then
+                die '--target-user requires a user name'
+            fi
+            TARGET_USER=$1
+            SYSTEM_TARGET_SET=1
             ;;
         -h | --help)
             usage
@@ -130,7 +146,7 @@ if [[ -z $TARGET_USER ]]; then
     TARGET_USER=$INVOKING_USER
 fi
 [[ -n $TARGET_USER && $TARGET_USER != root ]] ||
-    die 'cannot determine the non-root target user; pass --user USER'
+    die 'cannot determine the non-root target user; pass --target-user USER'
 [[ $TARGET_USER =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] ||
     die "invalid user name: $TARGET_USER"
 
@@ -154,11 +170,16 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly SCRIPT_DIR
 readonly SCRIPT_PATH=$SCRIPT_DIR/${BASH_SOURCE[0]##*/}
 
-if ((APPLY && EUID != 0)); then
+if ((EUID != 0 && !USER_ONLY)); then
     command -v sudo >/dev/null 2>&1 ||
-        die 'sudo is required to apply system changes'
-    log "Requesting sudo to apply changes for $TARGET_USER..."
-    exec sudo -- /bin/bash "$SCRIPT_PATH" --user "$TARGET_USER" --apply
+        die 'sudo is required for full-system mode; use --user for user-only mode'
+    if ((APPLY)); then
+        log "Requesting sudo for full-system apply for $TARGET_USER..."
+        exec sudo -- /bin/bash "$SCRIPT_PATH" --target-user "$TARGET_USER" --apply
+    else
+        log "Requesting sudo for full-system preflight for $TARGET_USER..."
+        exec sudo -- /bin/bash "$SCRIPT_PATH" --target-user "$TARGET_USER"
+    fi
 fi
 
 available_locales=$(locale -a)
@@ -300,8 +321,14 @@ render_managed_file() {
 
 ensure_backup_dir() {
     if [[ -z $BACKUP_DIR ]]; then
-        install -d -m 0700 /var/backups/debian-fix
-        BACKUP_DIR=$(mktemp -d /var/backups/debian-fix/run-XXXXXXXX)
+        if ((EUID == 0)); then
+            install -d -m 0700 /var/backups/debian-fix
+            BACKUP_DIR=$(mktemp -d /var/backups/debian-fix/run-XXXXXXXX)
+        else
+            local backup_root=$TARGET_HOME/.local/state/debian-fix/backups
+            install -d -m 0700 "$backup_root"
+            BACKUP_DIR=$(mktemp -d "$backup_root/run-XXXXXXXX")
+        fi
         chmod 0700 "$BACKUP_DIR"
     fi
 }
@@ -384,16 +411,16 @@ root_rendered=''
 sysinit_rendered=''
 sysinit_validation=''
 
-if ((EUID == 0)); then
+if ((EUID == 0 && !USER_ONLY)); then
     skel_rendered=$(prepare_bashrc "$SKEL_BASHRC" skel)
 fi
 if ((EUID == 0)) || can_inspect_file "$USER_BASHRC"; then
     user_rendered=$(prepare_bashrc "$USER_BASHRC" user)
 fi
-if ((EUID == 0)); then
+if ((EUID == 0 && !USER_ONLY)); then
     root_rendered=$(prepare_bashrc "$ROOT_BASHRC" root)
 fi
-if ((EUID == 0)); then
+if ((EUID == 0 && !USER_ONLY)); then
     sysinit_rendered=$WORK_DIR/sysinit.vim
     sysinit_validation=$WORK_DIR/sysinit-validation.vim
     render_managed_file "$NVIM_SYSINIT" "$WORK_DIR/nvim.block" "$NVIM_BEGIN" "$NVIM_END" \
@@ -455,14 +482,14 @@ if ((!APPLY)); then
     else
         log "deferred (requires root): $NVIM_SYSINIT"
     fi
-    if ((EUID == 0)); then
+    if ((EUID == 0 && !USER_ONLY)); then
         install_file_atomically "$NVIMRC_SOURCE" "$NVIM_CONFIG" 0644 0 0
     else
         log "deferred (requires root): $NVIM_CONFIG"
     fi
     if [[ -n $VISUDO ]]; then
         "$VISUDO" -cf "$WORK_DIR/sudoers" >/dev/null || die 'generated sudoers rule is invalid'
-        if ((EUID == 0)); then
+        if ((EUID == 0 && !USER_ONLY)); then
             "$VISUDO" -cf /etc/sudoers >/dev/null || die 'existing sudoers configuration is invalid'
         else
             log 'deferred (requires root): validation of /etc/sudoers'
@@ -470,22 +497,46 @@ if ((!APPLY)); then
     else
         log 'sudoers validation deferred until the sudo package is installed.'
     fi
-    if ((EUID == 0)); then
+    if ((EUID == 0 && !USER_ONLY)); then
         install_file_atomically "$WORK_DIR/sudoers" "$SUDOERS_DROPIN" 0440 0 0
     else
         log "deferred (requires root): $SUDOERS_DROPIN"
     fi
 
     log
-    log 'Preflight passed; no persistent changes were made.'
-    if ((EUID != 0)); then
-        log 'Privileged checks marked deferred will run after --apply requests sudo.'
-    fi
-    if [[ $TARGET_USER == "$INVOKING_USER" ]]; then
-        log "Apply with: bash ./$PROGRAM --apply"
+    if ((USER_ONLY)); then
+        log 'User-only preflight passed; no persistent changes were made.'
+        if [[ $TARGET_USER == "$INVOKING_USER" ]]; then
+            log "Apply only $USER_BASHRC with: bash ./$PROGRAM --user --apply"
+        else
+            log "Apply only $USER_BASHRC with: bash ./$PROGRAM --user $TARGET_USER --apply"
+        fi
+        log "Run the full-system preflight with: bash ./$PROGRAM"
     else
-        log "Apply with: bash ./$PROGRAM --user $TARGET_USER --apply"
+        log 'Full-system preflight passed; no persistent changes were made.'
+        if [[ $TARGET_USER == "$INVOKING_USER" ]]; then
+            log "Apply all changes with: bash ./$PROGRAM --apply"
+        else
+            log "Apply all changes with: bash ./$PROGRAM --target-user $TARGET_USER --apply"
+        fi
     fi
+    exit 0
+fi
+
+if ((USER_ONLY)); then
+    [[ -n $user_rendered ]] || die "cannot inspect user configuration: $USER_BASHRC"
+    if ((EUID != 0 && TARGET_UID != EUID)); then
+        die "user-only apply cannot modify another user's configuration: $TARGET_USER"
+    fi
+    install_file_atomically "$user_rendered" "$USER_BASHRC" 0644 "$TARGET_UID" "$TARGET_GID"
+
+    log
+    log "User-only configuration completed successfully for $TARGET_USER."
+    if [[ -n $BACKUP_DIR ]]; then
+        log "Backup of the changed file: $BACKUP_DIR"
+    fi
+    log 'Packages and system-wide configuration were not changed.'
+    log 'Open a new login shell to load the updated environment.'
     exit 0
 fi
 
