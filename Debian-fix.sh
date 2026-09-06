@@ -332,29 +332,6 @@ backup_file() {
     cp -a -- "$file" "$BACKUP_DIR/$backup_name"
 }
 
-handle_legacy_nvim_config() {
-    [[ -e $LEGACY_NVIM_CONFIG || -L $LEGACY_NVIM_CONFIG ]] || return 0
-
-    if [[ ! -f $LEGACY_NVIM_CONFIG || -L $LEGACY_NVIM_CONFIG ]]; then
-        log "leaving unrecognized obsolete path untouched: $LEGACY_NVIM_CONFIG"
-        return 0
-    fi
-    if ! cmp -s -- "$NVIM_SETTINGS" "$LEGACY_NVIM_CONFIG"; then
-        log "leaving modified obsolete file untouched: $LEGACY_NVIM_CONFIG"
-        return 0
-    fi
-
-    if ((!APPLY)); then
-        log "would remove obsolete managed file: $LEGACY_NVIM_CONFIG"
-        return 0
-    fi
-
-    backup_file "$LEGACY_NVIM_CONFIG"
-    unlink -- "$LEGACY_NVIM_CONFIG" ||
-        die "could not remove obsolete managed file: $LEGACY_NVIM_CONFIG"
-    log "removed obsolete managed file: $LEGACY_NVIM_CONFIG"
-}
-
 install_file_atomically() {
     local source_file=$1
     local target_file=$2
@@ -415,7 +392,6 @@ readonly SKEL_BASHRC=/etc/skel/.bashrc
 readonly USER_BASHRC=$TARGET_HOME/.bashrc
 readonly ROOT_BASHRC=/root/.bashrc
 readonly NVIM_SYSINIT=/etc/xdg/nvim/sysinit.vim
-readonly LEGACY_NVIM_CONFIG=/etc/xdg/nvim/debian-fix.vim
 readonly SUDOERS_DROPIN=/etc/sudoers.d/90-debian-fix-home
 
 skel_rendered=''
@@ -490,9 +466,6 @@ if ((!APPLY)); then
         install_file_atomically "$sysinit_rendered" "$NVIM_SYSINIT" 0644 0 0
     else
         log "deferred (requires root): $NVIM_SYSINIT"
-    fi
-    if ((EUID == 0 && !USER_ONLY)); then
-        handle_legacy_nvim_config
     fi
     if [[ -n $VISUDO ]]; then
         "$VISUDO" -cf "$WORK_DIR/sudoers" >/dev/null || die 'generated sudoers rule is invalid'
@@ -587,7 +560,6 @@ install_file_atomically "$skel_rendered" "$SKEL_BASHRC" 0644 0 0
 install_file_atomically "$user_rendered" "$USER_BASHRC" 0644 "$TARGET_UID" "$TARGET_GID"
 install_file_atomically "$root_rendered" "$ROOT_BASHRC" 0644 0 0
 install_file_atomically "$sysinit_rendered" "$NVIM_SYSINIT" 0644 0 0
-handle_legacy_nvim_config
 
 sudoers_existed=0
 if [[ -e $SUDOERS_DROPIN ]]; then
