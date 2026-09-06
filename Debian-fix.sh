@@ -384,7 +384,7 @@ root_rendered=''
 sysinit_rendered=''
 sysinit_validation=''
 
-if ((EUID == 0)) || can_inspect_file "$SKEL_BASHRC"; then
+if ((EUID == 0)); then
     skel_rendered=$(prepare_bashrc "$SKEL_BASHRC" skel)
 fi
 if ((EUID == 0)) || can_inspect_file "$USER_BASHRC"; then
@@ -393,7 +393,7 @@ fi
 if ((EUID == 0)); then
     root_rendered=$(prepare_bashrc "$ROOT_BASHRC" root)
 fi
-if ((EUID == 0)) || can_inspect_file "$NVIM_SYSINIT"; then
+if ((EUID == 0)); then
     sysinit_rendered=$WORK_DIR/sysinit.vim
     sysinit_validation=$WORK_DIR/sysinit-validation.vim
     render_managed_file "$NVIM_SYSINIT" "$WORK_DIR/nvim.block" "$NVIM_BEGIN" "$NVIM_END" \
@@ -455,7 +455,7 @@ if ((!APPLY)); then
     else
         log "deferred (requires root): $NVIM_SYSINIT"
     fi
-    if ((EUID == 0)) || can_inspect_file "$NVIM_CONFIG"; then
+    if ((EUID == 0)); then
         install_file_atomically "$NVIMRC_SOURCE" "$NVIM_CONFIG" 0644 0 0
     else
         log "deferred (requires root): $NVIM_CONFIG"
@@ -482,7 +482,7 @@ if ((!APPLY)); then
         log 'Privileged checks marked deferred will run after --apply requests sudo.'
     fi
     if [[ $TARGET_USER == "$INVOKING_USER" ]]; then
-        log "Apply with: bash ./$PROGRAM --user --apply"
+        log "Apply with: bash ./$PROGRAM --apply"
     else
         log "Apply with: bash ./$PROGRAM --user $TARGET_USER --apply"
     fi
