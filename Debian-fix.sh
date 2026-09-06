@@ -50,7 +50,7 @@ fi
 
 usage() {
     cat <<EOF
-Usage: ./$PROGRAM [--user [USER]] [--apply]
+Usage: bash ./$PROGRAM [--user [USER]] [--apply]
 
 Without --apply, perform a read-only preflight and show what would change.
 With --apply, request sudo when necessary, install the baseline packages, and
@@ -482,9 +482,9 @@ if ((!APPLY)); then
         log 'Privileged checks marked deferred will run after --apply requests sudo.'
     fi
     if [[ $TARGET_USER == "$INVOKING_USER" ]]; then
-        log "Apply with: ./$PROGRAM --user --apply"
+        log "Apply with: bash ./$PROGRAM --user --apply"
     else
-        log "Apply with: ./$PROGRAM --user $TARGET_USER --apply"
+        log "Apply with: bash ./$PROGRAM --user $TARGET_USER --apply"
     fi
     exit 0
 fi

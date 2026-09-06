@@ -17,13 +17,13 @@ command that must use root's home directory instead.
 Run the read-only preflight first:
 
 ```sh
-./Debian-fix.sh
+bash ./Debian-fix.sh
 ```
 
 Review the output, then apply it explicitly:
 
 ```sh
-./Debian-fix.sh --apply
+bash ./Debian-fix.sh --apply
 ```
 
 Preflight does not need sudo. Checks that require access to protected files are
@@ -34,14 +34,14 @@ The invoking account is selected by default. Bare `--user` explicitly makes
 the same selection, so these commands are equivalent:
 
 ```sh
-./Debian-fix.sh --apply
-./Debian-fix.sh --user --apply
+bash ./Debian-fix.sh --apply
+bash ./Debian-fix.sh --user --apply
 ```
 
 To configure a particular non-root account instead, pass its name:
 
 ```sh
-./Debian-fix.sh --user USER --apply
+bash ./Debian-fix.sh --user USER --apply
 ```
 
 In each case, the script configures the selected user's `.bashrc`, root's
@@ -50,7 +50,7 @@ In each case, the script configures the selected user's `.bashrc`, root's
 When running directly from a root login, specify the non-root account:
 
 ```sh
-./Debian-fix.sh --user USER --apply
+bash ./Debian-fix.sh --user USER --apply
 ```
 
 The script is idempotent: APT only installs missing packages and configuration
