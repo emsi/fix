@@ -5,14 +5,8 @@ Small system-configuration scripts.
 ## Debian
 
 `Debian-fix.sh` installs a practical Debian development and administration
-baseline, configures Bash history and Neovim, and preserves the invoking
-user's `HOME` under sudo. The sudo behavior is scoped to that user instead of
-being enabled globally. The script is standalone and does not require any
-companion configuration files.
-
-Preserving `HOME` is deliberate: privileged commands may consequently use
-configuration from the selected user's home directory. Use `sudo -H` for a
-command that must use root's home directory instead.
+baseline and configures Bash history and Neovim. The script is standalone and
+does not require any companion configuration files.
 
 The command determines both the scope and whether changes are applied:
 
@@ -24,9 +18,9 @@ The command determines both the scope and whether changes are applied:
 | `bash ./Debian-fix.sh --user --apply` | never requested | Current-user apply |
 
 Full-system mode covers package installation, the selected user's `.bashrc`,
-root's `.bashrc`, `/etc/skel/.bashrc`, system-wide Neovim configuration, and
-the selected user's sudoers rule. Its dry run executes with sudo so it can
-inspect every protected target accurately before reporting what would change.
+root's `.bashrc`, `/etc/skel/.bashrc`, and system-wide Neovim configuration.
+Its dry run executes with sudo so it can inspect every protected target
+accurately before reporting what would change.
 The Neovim settings are kept directly in a managed block in
 `/etc/xdg/nvim/sysinit.vim`.
 

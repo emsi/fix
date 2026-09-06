@@ -75,16 +75,6 @@ die() {
     exit 1
 }
 
-find_visudo() {
-    if command -v visudo >/dev/null 2>&1; then
-        command -v visudo
-    elif [[ -x /usr/sbin/visudo ]]; then
-        printf '%s\n' /usr/sbin/visudo
-    else
-        return 1
-    fi
-}
-
 can_inspect_file() {
     local file=$1
     local parent
@@ -187,8 +177,6 @@ awk 'BEGIN { found=0 }
      { value=tolower($0); gsub(/[._-]/, "", value); if (value == "cutf8") found=1 }
      END { exit !found }' <<<"$available_locales" ||
     die 'C.UTF-8 is not available on this system'
-
-VISUDO=$(find_visudo || :)
 
 WORK_DIR=$(mktemp -d)
 chmod 0700 "$WORK_DIR"
@@ -392,7 +380,6 @@ readonly SKEL_BASHRC=/etc/skel/.bashrc
 readonly USER_BASHRC=$TARGET_HOME/.bashrc
 readonly ROOT_BASHRC=/root/.bashrc
 readonly NVIM_SYSINIT=/etc/xdg/nvim/sysinit.vim
-readonly SUDOERS_DROPIN=/etc/sudoers.d/90-debian-fix-home
 
 skel_rendered=''
 user_rendered=''
@@ -413,9 +400,6 @@ if ((EUID == 0 && !USER_ONLY)); then
     render_managed_file "$NVIM_SYSINIT" "$WORK_DIR/nvim.block" "$NVIM_BEGIN" "$NVIM_END" \
         "$sysinit_rendered"
 fi
-
-printf 'Defaults:%s env_keep += "HOME"\n' "$TARGET_USER" >"$WORK_DIR/sudoers"
-chmod 0440 "$WORK_DIR/sudoers"
 
 log "Debian ${VERSION_ID:-unknown}; target user: $TARGET_USER ($TARGET_HOME)"
 log 'Baseline packages:'
@@ -467,22 +451,6 @@ if ((!APPLY)); then
     else
         log "deferred (requires root): $NVIM_SYSINIT"
     fi
-    if [[ -n $VISUDO ]]; then
-        "$VISUDO" -cf "$WORK_DIR/sudoers" >/dev/null || die 'generated sudoers rule is invalid'
-        if ((EUID == 0 && !USER_ONLY)); then
-            "$VISUDO" -cf /etc/sudoers >/dev/null || die 'existing sudoers configuration is invalid'
-        else
-            log 'deferred (requires root): validation of /etc/sudoers'
-        fi
-    else
-        log 'sudoers validation deferred until the sudo package is installed.'
-    fi
-    if ((EUID == 0 && !USER_ONLY)); then
-        install_file_atomically "$WORK_DIR/sudoers" "$SUDOERS_DROPIN" 0440 0 0
-    else
-        log "deferred (requires root): $SUDOERS_DROPIN"
-    fi
-
     log
     if ((USER_ONLY)); then
         log 'User-only preflight passed; no persistent changes were made.'
@@ -544,11 +512,7 @@ for package in "${PACKAGES[@]}"; do
         die "package is not installed after APT completed: $package"
 done
 
-VISUDO=$(find_visudo || :)
-[[ -n $VISUDO ]] || die 'visudo is unavailable after installing sudo'
 command -v nvim >/dev/null 2>&1 || die 'nvim is unavailable after installing neovim'
-"$VISUDO" -cf "$WORK_DIR/sudoers" >/dev/null || die 'generated sudoers rule is invalid'
-"$VISUDO" -cf /etc/sudoers >/dev/null || die 'sudoers configuration became invalid'
 nvim --headless -u "$NVIM_SETTINGS" '+qa!' >/dev/null 2>&1 ||
     die 'Neovim rejected the managed system settings'
 nvim --headless -u "$sysinit_rendered" '+qa!' >/dev/null 2>&1 ||
@@ -560,21 +524,6 @@ install_file_atomically "$skel_rendered" "$SKEL_BASHRC" 0644 0 0
 install_file_atomically "$user_rendered" "$USER_BASHRC" 0644 "$TARGET_UID" "$TARGET_GID"
 install_file_atomically "$root_rendered" "$ROOT_BASHRC" 0644 0 0
 install_file_atomically "$sysinit_rendered" "$NVIM_SYSINIT" 0644 0 0
-
-sudoers_existed=0
-if [[ -e $SUDOERS_DROPIN ]]; then
-    sudoers_existed=1
-    cp -a -- "$SUDOERS_DROPIN" "$WORK_DIR/sudoers.previous"
-fi
-install_file_atomically "$WORK_DIR/sudoers" "$SUDOERS_DROPIN" 0440 0 0
-if ! "$VISUDO" -cf /etc/sudoers >/dev/null; then
-    if ((sudoers_existed)); then
-        cp -a -- "$WORK_DIR/sudoers.previous" "$SUDOERS_DROPIN"
-    else
-        rm -f -- "$SUDOERS_DROPIN"
-    fi
-    die 'installed sudoers configuration was invalid and has been rolled back'
-fi
 
 XDG_CONFIG_HOME="$WORK_DIR/xdg-home" XDG_CONFIG_DIRS=/etc/xdg \
     nvim --headless '+qa!' >/dev/null 2>&1 || die 'installed Neovim configuration failed validation'
