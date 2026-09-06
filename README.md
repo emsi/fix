@@ -7,7 +7,8 @@ Small system-configuration scripts.
 `Debian-fix.sh` installs a practical Debian development and administration
 baseline, configures Bash history and Neovim, and preserves the invoking
 user's `HOME` under sudo. The sudo behavior is scoped to that user instead of
-being enabled globally.
+being enabled globally. The script is standalone and does not require any
+companion configuration files.
 
 Preserving `HOME` is deliberate: privileged commands may consequently use
 configuration from the selected user's home directory. Use `sudo -H` for a

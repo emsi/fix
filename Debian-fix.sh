@@ -153,15 +153,12 @@ IFS=: read -r _ _ TARGET_UID TARGET_GID _ TARGET_HOME TARGET_SHELL <<<"$passwd_e
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly SCRIPT_DIR
 readonly SCRIPT_PATH=$SCRIPT_DIR/${BASH_SOURCE[0]##*/}
-readonly NVIMRC_SOURCE=$SCRIPT_DIR/nvimrc
-[[ -f $NVIMRC_SOURCE && ! -L $NVIMRC_SOURCE ]] ||
-    die "expected a regular file next to the script: $NVIMRC_SOURCE"
 
 if ((APPLY && EUID != 0)); then
     command -v sudo >/dev/null 2>&1 ||
         die 'sudo is required to apply system changes'
     log "Requesting sudo to apply changes for $TARGET_USER..."
-    exec sudo -- "$SCRIPT_PATH" --user "$TARGET_USER" --apply
+    exec sudo -- /bin/bash "$SCRIPT_PATH" --user "$TARGET_USER" --apply
 fi
 
 available_locales=$(locale -a)
@@ -174,6 +171,24 @@ VISUDO=$(find_visudo || :)
 
 WORK_DIR=$(mktemp -d)
 chmod 0700 "$WORK_DIR"
+readonly NVIMRC_SOURCE=$WORK_DIR/nvimrc
+
+cat >"$NVIMRC_SOURCE" <<'EOF'
+" System-wide Neovim preferences installed by Debian-fix.sh.
+
+" Enable mouse support in every mode.
+set mouse=a
+
+" Complete the longest common match, list alternatives, then cycle matches.
+set wildmode=longest,list,full
+
+" Use four-column indentation when editing C source and header files.
+augroup vimrcEx
+  au!
+  autocmd FileType text setlocal textwidth=78
+  autocmd FileType c setlocal shiftwidth=4 softtabstop=4
+augroup END
+EOF
 
 cat >"$WORK_DIR/bash.block" <<'EOF'
 # BEGIN Debian-fix managed settings
