@@ -188,6 +188,9 @@ cat >"$NVIM_SETTINGS" <<'EOF'
 " Enable mouse support in every mode.
 set mouse=a
 
+" Keep the terminal's cursor shape instead of using thin mode-specific cursors.
+set guicursor=
+
 " Complete the longest common match, list alternatives, then cycle matches.
 set wildmode=longest,list,full
 
