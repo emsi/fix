@@ -192,9 +192,9 @@ VISUDO=$(find_visudo || :)
 
 WORK_DIR=$(mktemp -d)
 chmod 0700 "$WORK_DIR"
-readonly NVIMRC_SOURCE=$WORK_DIR/nvimrc
+readonly NVIM_SETTINGS=$WORK_DIR/nvim-settings.vim
 
-cat >"$NVIMRC_SOURCE" <<'EOF'
+cat >"$NVIM_SETTINGS" <<'EOF'
 " System-wide Neovim preferences installed by Debian-fix.sh.
 
 " Enable mouse support in every mode.
@@ -255,21 +255,11 @@ fi
 # END Debian-fix managed settings
 EOF
 
-cat >"$WORK_DIR/nvim.block" <<'EOF'
-" BEGIN Debian-fix managed settings
-if filereadable('/etc/xdg/nvim/debian-fix.vim')
-    source /etc/xdg/nvim/debian-fix.vim
-endif
-" END Debian-fix managed settings
-EOF
-
-[[ $NVIMRC_SOURCE != *"'"* && $NVIMRC_SOURCE != *$'\n'* ]] ||
-    die "unsupported character in repository path: $NVIMRC_SOURCE"
 {
     printf '%s\n' "$NVIM_BEGIN"
-    printf "execute 'source ' . fnameescape('%s')\n" "$NVIMRC_SOURCE"
+    cat "$NVIM_SETTINGS"
     printf '%s\n' "$NVIM_END"
-} >"$WORK_DIR/nvim-validation.block"
+} >"$WORK_DIR/nvim.block"
 
 render_managed_file() {
     local source_file=$1
@@ -342,6 +332,29 @@ backup_file() {
     cp -a -- "$file" "$BACKUP_DIR/$backup_name"
 }
 
+handle_legacy_nvim_config() {
+    [[ -e $LEGACY_NVIM_CONFIG || -L $LEGACY_NVIM_CONFIG ]] || return 0
+
+    if [[ ! -f $LEGACY_NVIM_CONFIG || -L $LEGACY_NVIM_CONFIG ]]; then
+        log "leaving unrecognized obsolete path untouched: $LEGACY_NVIM_CONFIG"
+        return 0
+    fi
+    if ! cmp -s -- "$NVIM_SETTINGS" "$LEGACY_NVIM_CONFIG"; then
+        log "leaving modified obsolete file untouched: $LEGACY_NVIM_CONFIG"
+        return 0
+    fi
+
+    if ((!APPLY)); then
+        log "would remove obsolete managed file: $LEGACY_NVIM_CONFIG"
+        return 0
+    fi
+
+    backup_file "$LEGACY_NVIM_CONFIG"
+    unlink -- "$LEGACY_NVIM_CONFIG" ||
+        die "could not remove obsolete managed file: $LEGACY_NVIM_CONFIG"
+    log "removed obsolete managed file: $LEGACY_NVIM_CONFIG"
+}
+
 install_file_atomically() {
     local source_file=$1
     local target_file=$2
@@ -402,14 +415,13 @@ readonly SKEL_BASHRC=/etc/skel/.bashrc
 readonly USER_BASHRC=$TARGET_HOME/.bashrc
 readonly ROOT_BASHRC=/root/.bashrc
 readonly NVIM_SYSINIT=/etc/xdg/nvim/sysinit.vim
-readonly NVIM_CONFIG=/etc/xdg/nvim/debian-fix.vim
+readonly LEGACY_NVIM_CONFIG=/etc/xdg/nvim/debian-fix.vim
 readonly SUDOERS_DROPIN=/etc/sudoers.d/90-debian-fix-home
 
 skel_rendered=''
 user_rendered=''
 root_rendered=''
 sysinit_rendered=''
-sysinit_validation=''
 
 if ((EUID == 0 && !USER_ONLY)); then
     skel_rendered=$(prepare_bashrc "$SKEL_BASHRC" skel)
@@ -422,11 +434,8 @@ if ((EUID == 0 && !USER_ONLY)); then
 fi
 if ((EUID == 0 && !USER_ONLY)); then
     sysinit_rendered=$WORK_DIR/sysinit.vim
-    sysinit_validation=$WORK_DIR/sysinit-validation.vim
     render_managed_file "$NVIM_SYSINIT" "$WORK_DIR/nvim.block" "$NVIM_BEGIN" "$NVIM_END" \
         "$sysinit_rendered"
-    render_managed_file "$NVIM_SYSINIT" "$WORK_DIR/nvim-validation.block" "$NVIM_BEGIN" "$NVIM_END" \
-        "$sysinit_validation"
 fi
 
 printf 'Defaults:%s env_keep += "HOME"\n' "$TARGET_USER" >"$WORK_DIR/sudoers"
@@ -451,10 +460,10 @@ done
 
 if ((!APPLY)); then
     if command -v nvim >/dev/null 2>&1; then
-        nvim --headless -u "$NVIMRC_SOURCE" '+qa!' >/dev/null 2>&1 ||
-            die "Neovim rejected $NVIMRC_SOURCE"
-        if [[ -n $sysinit_validation ]]; then
-            nvim --headless -u "$sysinit_validation" '+qa!' >/dev/null 2>&1 ||
+        nvim --headless -u "$NVIM_SETTINGS" '+qa!' >/dev/null 2>&1 ||
+            die 'Neovim rejected the managed system settings'
+        if [[ -n $sysinit_rendered ]]; then
+            nvim --headless -u "$sysinit_rendered" '+qa!' >/dev/null 2>&1 ||
                 die 'Neovim rejected the prospective system configuration'
         else
             log "deferred (requires root): Neovim validation of $NVIM_SYSINIT"
@@ -483,9 +492,7 @@ if ((!APPLY)); then
         log "deferred (requires root): $NVIM_SYSINIT"
     fi
     if ((EUID == 0 && !USER_ONLY)); then
-        install_file_atomically "$NVIMRC_SOURCE" "$NVIM_CONFIG" 0644 0 0
-    else
-        log "deferred (requires root): $NVIM_CONFIG"
+        handle_legacy_nvim_config
     fi
     if [[ -n $VISUDO ]]; then
         "$VISUDO" -cf "$WORK_DIR/sudoers" >/dev/null || die 'generated sudoers rule is invalid'
@@ -542,7 +549,7 @@ fi
 
 ((EUID == 0)) || die 'internal error: apply mode requires root'
 [[ -n $skel_rendered && -n $user_rendered && -n $root_rendered &&
-    -n $sysinit_rendered && -n $sysinit_validation ]] ||
+    -n $sysinit_rendered ]] ||
     die 'internal error: privileged configuration preflight was incomplete'
 
 exec 9>/run/lock/debian-fix.lock
@@ -569,9 +576,9 @@ VISUDO=$(find_visudo || :)
 command -v nvim >/dev/null 2>&1 || die 'nvim is unavailable after installing neovim'
 "$VISUDO" -cf "$WORK_DIR/sudoers" >/dev/null || die 'generated sudoers rule is invalid'
 "$VISUDO" -cf /etc/sudoers >/dev/null || die 'sudoers configuration became invalid'
-nvim --headless -u "$NVIMRC_SOURCE" '+qa!' >/dev/null 2>&1 ||
-    die "Neovim rejected $NVIMRC_SOURCE"
-nvim --headless -u "$sysinit_validation" '+qa!' >/dev/null 2>&1 ||
+nvim --headless -u "$NVIM_SETTINGS" '+qa!' >/dev/null 2>&1 ||
+    die 'Neovim rejected the managed system settings'
+nvim --headless -u "$sysinit_rendered" '+qa!' >/dev/null 2>&1 ||
     die 'Neovim rejected the prospective system configuration'
 
 # Configuration was only planned above. Apply it now that packages and their
@@ -580,7 +587,7 @@ install_file_atomically "$skel_rendered" "$SKEL_BASHRC" 0644 0 0
 install_file_atomically "$user_rendered" "$USER_BASHRC" 0644 "$TARGET_UID" "$TARGET_GID"
 install_file_atomically "$root_rendered" "$ROOT_BASHRC" 0644 0 0
 install_file_atomically "$sysinit_rendered" "$NVIM_SYSINIT" 0644 0 0
-install_file_atomically "$NVIMRC_SOURCE" "$NVIM_CONFIG" 0644 0 0
+handle_legacy_nvim_config
 
 sudoers_existed=0
 if [[ -e $SUDOERS_DROPIN ]]; then

@@ -27,6 +27,8 @@ Full-system mode covers package installation, the selected user's `.bashrc`,
 root's `.bashrc`, `/etc/skel/.bashrc`, system-wide Neovim configuration, and
 the selected user's sudoers rule. Its dry run executes with sudo so it can
 inspect every protected target accurately before reporting what would change.
+The Neovim settings are kept directly in a managed block in
+`/etc/xdg/nvim/sysinit.vim`.
 
 User-only mode never requests sudo. It reports package status for context but
 does not install packages or inspect or modify system-owned configuration. Its
